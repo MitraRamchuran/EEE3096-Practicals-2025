@@ -1,0 +1,292 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Mandelbrot Benchmark Example for STM32F4
+  ******************************************************************************
+  * @details
+  * This program runs a Mandelbrot benchmark in both fixed-point and floating-
+  * point arithmetic on the STM32F4 platform. It also integrates GPIO toggling
+  * for visual feedback and timing measurements with SysTick and the DWT cycle
+  * counter.
+  *
+  * Copyright (c) 2025
+  * Provided for educational and benchmarking purposes.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+
+/* Extra includes ------------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include <stdint.h>
+#include <stdio.h>
+#include "stm32f4xx.h"
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+// None required for this demo
+/* USER CODE END PTD */
+
+/* Private defines -----------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+
+#define MAX_ITER        100
+#define NUM_TESTS       5
+#define CPU_FREQ_HZ     120000000UL   /* Expected frequency from SystemClock_Config */
+
+/* USER CODE END PD */
+
+/* Private macros ------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+// No additional macros at this stage
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+/* USER CODE BEGIN PV */
+
+/* Timing and profiling counters */
+volatile uint32_t start_ms = 0;
+volatile uint32_t end_ms = 0;
+volatile uint32_t elapsed_ms = 0;
+
+volatile uint32_t start_cycles = 0;
+volatile uint32_t end_cycles = 0;
+volatile uint32_t elapsed_cycles = 0;
+
+/* Alternative image resolutions (rectangular) */
+const int widths[]  = {128, 256, 512, 800, 1280, 1920};
+const int heights[] = {128, 256, 512, 600,  720, 1080};
+#define NUM_SIZES (sizeof(widths)/sizeof(widths[0]))
+
+/* Arrays to store results */
+volatile uint32_t exec_time_fixed_ms[NUM_TESTS] = {0};
+volatile uint32_t exec_time_double_ms[NUM_TESTS] = {0};
+volatile uint32_t exec_cycles_fixed[NUM_TESTS] = {0};
+volatile uint32_t exec_cycles_double[NUM_TESTS] = {0};
+volatile uint64_t checksum_fixed[NUM_TESTS] = {0};
+volatile uint64_t checksum_double[NUM_TESTS] = {0};
+volatile uint32_t checksum[NUM_TESTS] = {0};
+volatile uint32_t execution_time[NUM_TESTS] = {0};
+
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+/* USER CODE BEGIN PFP */
+
+/* Mandelbrot calculations */
+uint64_t calculate_mandelbrot_fixed_point_arithmetic(int width, int height, int max_iterations);
+uint64_t calculate_mandelbrot_double(int width, int height, int max_iterations);
+uint64_t calculate_mandelbrot_tiled(int width, int height, int max_iterations, int chunk_height);
+
+/* Cycle counter helpers (Cortex-M4) */
+static inline void dwt_enable_cycle_counter(void);
+static inline uint32_t dwt_get_cycle_count(void);
+
+/* Derived metrics */
+static inline uint32_t compute_pixels_per_sec(uint32_t pixels, uint32_t cycles);
+
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+
+/* Enable the cycle counter inside DWT unit */
+static inline void dwt_enable_cycle_counter(void)
+{
+  if (!(CoreDebug->DEMCR & CoreDebug_DEMCR_TRCENA_Msk))
+  {
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  }
+  DWT->CYCCNT = 0;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+}
+
+/* Fetch the current cycle counter value */
+static inline uint32_t dwt_get_cycle_count(void)
+{
+  return DWT->CYCCNT;
+}
+
+/* Calculate throughput in pixels/sec */
+static inline uint32_t compute_pixels_per_sec(uint32_t pixels, uint32_t cycles)
+{
+  if (cycles == 0) return 0;
+  uint64_t temp = (uint64_t)pixels * (uint64_t)CPU_FREQ_HZ;
+  temp = temp / (uint64_t)cycles;
+  if (temp > 0xFFFFFFFFULL) return 0xFFFFFFFFU;
+  return (uint32_t)temp;
+}
+
+/* Fixed-point Mandelbrot (Q16.16 arithmetic) */
+uint64_t calculate_mandelbrot_fixed_point_arithmetic(int width, int height, int max_iterations)
+{
+    uint64_t mandelbrot_sum = 0;
+
+    const int32_t scale_shift = 16;
+    const int32_t scale_factor = (1 << scale_shift);
+    const int32_t escape_limit = 4 << scale_shift;
+
+    int32_t x_step = (int32_t)((3.5 * (double)scale_factor) / (double)width + 0.5);
+    int32_t y_step = (int32_t)((2.0 * (double)scale_factor) / (double)height + 0.5);
+    int32_t x_offset = - (int32_t)(2.5 * (double)scale_factor + 0.5);
+    int32_t y_offset = - (int32_t)(1.0 * (double)scale_factor + 0.5);
+
+    for (int y = 0; y < height; y++)
+    {
+        int32_t y0 = y * y_step + y_offset;
+        for (int x = 0; x < width; x++)
+        {
+            int32_t x0 = x * x_step + x_offset;
+            int32_t xi = 0, yi = 0;
+            int iteration = 0;
+
+            while (iteration < max_iterations)
+            {
+                int64_t xi_sq = ((int64_t)xi * (int64_t)xi) >> scale_shift;
+                int64_t yi_sq = ((int64_t)yi * (int64_t)yi) >> scale_shift;
+
+                if ((xi_sq + yi_sq) > (int64_t)escape_limit) break;
+
+                int32_t xi_yi = (int32_t)(((int64_t)xi * (int64_t)yi) >> (scale_shift - 1));
+                int32_t xi_new = (int32_t)(xi_sq - yi_sq) + x0;
+                int32_t yi_new = xi_yi + y0;
+
+                xi = xi_new;
+                yi = yi_new;
+                iteration++;
+            }
+            mandelbrot_sum += (uint64_t)iteration;
+        }
+    }
+    return mandelbrot_sum;
+}
+
+/* Double-precision Mandelbrot reference */
+uint64_t calculate_mandelbrot_double(int width, int height, int max_iterations)
+{
+    uint64_t mandelbrot_sum = 0;
+    const double x_step = 3.5 / (double)width;
+    const double y_step = 2.0 / (double)height;
+
+    for (int y = 0; y < height; y++)
+    {
+        double y0 = y * y_step - 1.0;
+        for (int x = 0; x < width; x++)
+        {
+            double x0 = x * x_step - 2.5;
+            double xi = 0.0, yi = 0.0;
+            int iteration = 0;
+
+            while (iteration < max_iterations)
+            {
+                double xi_sq = xi * xi;
+                double yi_sq = yi * yi;
+                if ((xi_sq + yi_sq) > 4.0) break;
+
+                double yi_new = 2.0 * xi * yi + y0;
+                double xi_new = xi_sq - yi_sq + x0;
+
+                xi = xi_new;
+                yi = yi_new;
+                iteration++;
+            }
+            mandelbrot_sum += (uint64_t)iteration;
+        }
+    }
+    return mandelbrot_sum;
+}
+
+/* Mandelbrot implementation with vertical chunking */
+uint64_t calculate_mandelbrot_tiled(int width, int height, int max_iterations, int chunk_height)
+{
+    uint64_t total_checksum = 0;
+    const double x_step = 3.5 / (double)width;
+    const double y_step = 2.0 / (double)height;
+
+    for (int y_chunk_start = 0; y_chunk_start < height; y_chunk_start += chunk_height)
+    {
+        int y_chunk_end = y_chunk_start + chunk_height;
+        if (y_chunk_end > height) {
+            y_chunk_end = height;
+        }
+
+        for (int y = y_chunk_start; y < y_chunk_end; y++)
+        {
+            double y0 = y * y_step - 1.0;
+            for (int x = 0; x < width; x++)
+            {
+                double x0 = x * x_step - 2.5;
+                double xi = 0.0, yi = 0.0;
+                int iteration = 0;
+
+                while (iteration < max_iterations)
+                {
+                    double xi_sq = xi * xi;
+                    double yi_sq = yi * yi;
+                    if ((xi_sq + yi_sq) > 4.0) break;
+
+                    double yi_new = 2.0 * xi * yi + y0;
+                    double xi_new = xi_sq - yi_sq + x0;
+
+                    xi = xi_new;
+                    yi = yi_new;
+                    iteration++;
+                }
+                total_checksum += (uint64_t)iteration;
+            }
+        }
+    }
+    return total_checksum;
+}
+
+/* USER CODE END 0 */
+
+/**
+  * @brief  Main application entry point.
+  */
+int main(void)
+{
+  HAL_Init();
+  SystemClock_Config();
+  MX_GPIO_Init();
+
+  while (1)
+  {
+    /* Signal start of computation with LED */
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+
+    /* Run Mandelbrot benchmarks */
+    for (int i = 0; i < NUM_SIZES; i++) {
+        int w = widths[i];
+        int h = heights[i];
+        int chunk_height = 800;  
+        uint32_t pixels = (uint32_t)w * (uint32_t)h;
+
+        start_ms = HAL_GetTick();
+        uint64_t cs_fixed = calculate_mandelbrot_tiled(w, h, MAX_ITER, chunk_height);
+        end_ms = HAL_GetTick();
+
+        execution_time[i] = end_ms - start_ms;
+        checksum[i] = cs_fixed;
+
+        HAL_Delay(20);
+    }
+
+    /* Indicate end of computation with LED */
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_SET);
+
+    HAL_Delay(2000);
+
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET);
+
+    HAL_Delay(2000);
+  }
+}
