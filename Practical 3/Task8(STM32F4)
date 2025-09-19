@@ -1,3 +1,9 @@
+/Note that this is just a modified code that is a minimal “instrumentation snippet” to toggle a GPIO during Mandelbrot calculation specifically for power measurement.
+/******************************************************************************
+
+
+
+
 /* USER CODE BEGIN Header */
 /**
   ******************************************************************************
