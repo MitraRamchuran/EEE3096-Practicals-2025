@@ -1,1 +1,123 @@
+/*
+ * assembly.s
+ *
+ * EEE3095S Practical 2
+ * Corrected version. The primary bug in the previous version was the incorrect
+ * use of 'LDR Rx, =LABEL' which loads an address, instead of 'LDR Rx, LABEL'
+ * which loads the value from the literal pool. This caused the peripheral
+ * base addresses to be wrong, and thus the GPIO clocks were never enabled.
+ */
+ 
+ @ DO NOT EDIT
+	.syntax unified
+    .text
+    .global ASM_Main
+    .thumb_func
 
+@ DO NOT EDIT
+vectors:
+	.word 0x20002000
+	.word ASM_Main + 1
+
+@ DO NOT EDIT label ASM_Main
+ASM_Main:
+	@ --- Initialization Code ---
+	@ Enable clock for GPIOA and B by setting bit 17 and 18 in RCC_AHBENR
+	LDR R0, RCC_BASE  		@ CORRECT: Load the VALUE 0x40021000 into R0
+	LDR R1, [R0, #0x14]		@ Read the current RCC_AHBENR register
+	LDR R2, AHBENR_GPIOAB	@ CORRECT: Load the VALUE for the enable bits
+	ORRS R1, R1, R2			@ Set bits 17 and 18 (GPIOA and GPIOB clock enable)
+	STR R1, [R0, #0x14]		@ Write the new value back
+
+	@ Configure GPIOA (Pushbuttons) with pull-up resistors
+	LDR R0, GPIOA_BASE		@ CORRECT: Load base address for GPIOA
+	MOVS R1, #0b01010101     @ Set PUPDR for pins 0-3 to pull-up (01)
+	STR R1, [R0, #0x0C]
+
+	@ Configure GPIOB (LEDs) as outputs
+	LDR R1, GPIOB_BASE  	@ CORRECT: Load base address for GPIOB
+	LDR R2, MODER_OUTPUT
+	STR R2, [R1, #0]
+
+	@ Initialize LED counter register
+	MOVS R2, #0         	@ R2 will hold the value for the LEDs. Start at 0.
+
+@ --- Main Application Logic ---
+main_loop:
+	@ Load peripheral base addresses for this loop iteration
+	LDR R0, GPIOA_BASE		@ R0 = GPIOA peripheral base
+	LDR R1, GPIOB_BASE		@ R1 = GPIOB peripheral base
+
+	@ Read the state of all buttons on GPIOA
+	LDR R3, [R0, #0x10]		@ R3 = GPIOA Input Data Register (IDR)
+							@ A pressed button reads as 0, unpressed as 1.
+
+	@ Task 5: Check SW3 (Freeze). Highest priority.
+	TST R3, #SW3_PIN		@ Test if bit 3 is 0.
+	BEQ main_loop			@ If pressed (bit is 0), branch to start of loop.
+							@ This skips the LED write and delay, freezing the display.
+
+	@ Task 4: Check SW2 (Set pattern to 0xAA).
+	TST R3, #SW2_PIN		@ Test if bit 2 is 0.
+	BNE check_default_count	@ If NOT pressed, branch to the normal counting logic.
+
+	@ If we are here, SW2 IS pressed.
+	LDR R2, =0xAA			@ Set the LED pattern to 0xAA.
+	B select_delay			@ Jump to the delay selection logic.
+
+check_default_count:
+	@ This logic runs if SW2 is NOT pressed.
+	@ Task 2: Determine increment value based on SW0.
+	MOVS R4, #1				@ Default increment value is 1.
+	TST R3, #SW0_PIN		@ Test if SW0 (bit 0) is pressed.
+	IT EQ					@ If-Then block for the next instruction.
+	MOVEQ R4, #2			@ If SW0 is pressed, set increment value to 2.
+
+	ADDS R2, R2, R4			@ Add the increment value to the LED counter.
+
+select_delay:
+	@ This section is reached by both the SW2 path and the default path.
+	@ Task 3: Determine delay duration based on SW1.
+	LDR R5, LONG_DELAY_CNT	@ Load the default (long) delay value into R5.
+	TST R3, #SW1_PIN		@ Test if SW1 (bit 1) is pressed.
+	IT EQ					@ If-Then block for the next instruction.
+	LDREQ R5, SHORT_DELAY_CNT @ If SW1 is pressed, load the short delay value instead.
+
+write_leds_and_delay:
+	@ Write the determined pattern (from R2) to the LEDs and execute the delay.
+	STR R2, [R1, #0x14]		@ Write R2 to the GPIOB Output Data Register (ODR).
+
+	@ Call the delay subroutine with the duration in R5.
+	BL delay_subroutine
+
+	@ Loop back to the beginning.
+	B main_loop
+
+@ --- Subroutines ---
+delay_subroutine:
+	@ A simple decrementing loop for creating a delay.
+	@ The delay duration is determined by the initial value in R5.
+delay_loop:
+	SUBS R5, R5, #1			@ Decrement the counter in R5.
+	BNE delay_loop			@ If R5 is not zero, loop again.
+	BX LR					@ Return from subroutine (to the instruction after BL).
+
+@ LITERALS; DO NOT EDIT
+	.align
+RCC_BASE: 			.word 0x40021000
+AHBENR_GPIOAB: 		.word 0x00060000 @ Bits 17 (GPIOAEN) and 18 (GPIOBEN)
+GPIOA_BASE:  		.word 0x48000000
+GPIOB_BASE:  		.word 0x48000400
+MODER_OUTPUT: 		.word 0x00005555 @ Set pins 0-7 as outputs
+
+@ TODO: Add your own values for these delays
+@ These values are a good starting point for a system clock of ~8MHz.
+@ You may need to tune them by observing the LED blink rate on your hardware.
+LONG_DELAY_CNT: 	.word 700000	@ Approx. 0.7 seconds
+SHORT_DELAY_CNT: 	.word 300000	@ Approx. 0.3 seconds
+
+@ Pin masks for buttons for better readability. Using immediate values is more efficient.
+.equ SW0_PIN, 0b0001
+.equ SW1_PIN, 0b0010
+.equ SW2_PIN, 0b0100
+.equ SW3_PIN, 0b1000
