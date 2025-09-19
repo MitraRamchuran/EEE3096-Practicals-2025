@@ -1,1 +1,223 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body for EEE3095S Practical 1A
+  * @author         : [Your Name]
+  * @date           : July 29, 2025
+  *
+  * @brief
+  * This program implements three LED display modes controlled by pushbuttons,
+  * with the animation driven by a timer interrupt. The button polling logic
+  * is located in the main while-loop for responsiveness, while the timer ISR
+  * handles the periodic updating of the LED patterns.
+  *
+  * - Button PA1 (Button1): Activates Mode 1 (Back/Forth).
+  * - Button PA2 (Button2): Activates Mode 2 (Inverse Back/Forth).
+  * - Button PA3 (Button3): Activates Mode 3 (Sparkle).
+  * - Button PA0 (Button0): Toggles speed between 1.0s and 0.5s.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
 
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include <stdint.h>
+#include "stm32f0xx.h"
+#include <stdlib.h> // For rand() and srand()
+#include "test.c"
+
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+#define SLOW_MODE_PERIOD (1000 - 1)
+#define FAST_MODE_PERIOD (500 - 1)
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+TIM_HandleTypeDef htim16;
+
+/* USER CODE BEGIN PV */
+// --- Global State Variables ---
+// These variables are shared between the main loop and the ISR.
+// They are declared 'volatile' to ensure the compiler always reads their
+// current value and doesn't make incorrect optimizations.
+
+// Holds the active LED display mode (0=Off, 1, 2, or 3)
+volatile uint8_t current_mode = 0;
+
+// Array of patterns for a single LED being on. 'const' stores it in Flash.
+const uint8_t led_patterns[] = {0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80};
+
+// Current index in the led_patterns array for Modes 1 & 2.
+volatile int8_t led_position = 0;
+
+// Direction of travel for Modes 1 & 2 (1=forward, -1=backward).
+volatile int8_t direction = 1;
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+static void MX_TIM16_Init(void);
+/* USER CODE BEGIN PFP */
+void write_leds(uint8_t value);
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+/* USER CODE END 0 */
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
+{
+  /* USER CODE BEGIN 1 */
+  uint8_t is_fast_mode = 0; // Local variable to track speed state
+  /* USER CODE END 1 */
+
+  /* MCU Configuration--------------------------------------------------------*/
+  HAL_Init();
+  SystemClock_Config();
+  MX_GPIO_Init();
+  MX_TIM16_Init();
+
+  /* USER CODE BEGIN 2 */
+  srand(HAL_GetTick()); // Seed the random number generator
+  write_leds(0x00);     // Ensure all LEDs are off on startup
+
+  // Start the TIM16 timer in interrupt mode
+  HAL_TIM_Base_Start_IT(&htim16);
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
+    // --- Button Polling Section ---
+    // This section continuously checks for button presses. This is the correct
+    // structure for responsive input handling.
+
+    // Check for Mode 1 button (PA1)
+    if (HAL_GPIO_ReadPin(Button1_GPIO_Port, Button1_Pin) == GPIO_PIN_RESET) {
+        HAL_Delay(50); // Debounce delay
+        if (HAL_GPIO_ReadPin(Button1_GPIO_Port, Button1_Pin) == GPIO_PIN_RESET) {
+            current_mode = 1;
+            // Wait for button release to prevent multiple triggers
+            while(HAL_GPIO_ReadPin(Button1_GPIO_Port, Button1_Pin) == GPIO_PIN_RESET);
+        }
+    }
+    // Check for Mode 2 button (PA2)
+    else if (HAL_GPIO_ReadPin(Button2_GPIO_Port, Button2_Pin) == GPIO_PIN_RESET) {
+        HAL_Delay(50); // Debounce delay
+        if (HAL_GPIO_ReadPin(Button2_GPIO_Port, Button2_Pin) == GPIO_PIN_RESET) {
+            current_mode = 2;
+            while(HAL_GPIO_ReadPin(Button2_GPIO_Port, Button2_Pin) == GPIO_PIN_RESET);
+        }
+    }
+    // Check for Mode 3 button (PA3)
+    else if (HAL_GPIO_ReadPin(Button3_GPIO_Port, Button3_Pin) == GPIO_PIN_RESET) {
+        HAL_Delay(50); // Debounce delay
+        if (HAL_GPIO_ReadPin(Button3_GPIO_Port, Button3_Pin) == GPIO_PIN_RESET) {
+            current_mode = 3;
+            while(HAL_GPIO_ReadPin(Button3_GPIO_Port, Button3_Pin) == GPIO_PIN_RESET);
+        }
+    }
+
+    // Check for speed toggle button (PA0) independently
+    if (HAL_GPIO_ReadPin(Button0_GPIO_Port, Button0_Pin) == GPIO_PIN_RESET)
+    {
+      HAL_Delay(50); // Debounce delay
+      if (HAL_GPIO_ReadPin(Button0_GPIO_Port, Button0_Pin) == GPIO_PIN_RESET)
+      {
+        is_fast_mode = !is_fast_mode; // Toggle the speed flag
+        if (is_fast_mode) {
+          __HAL_TIM_SET_AUTORELOAD(&htim16, FAST_MODE_PERIOD); // Set 0.5s interval
+        } else {
+          __HAL_TIM_SET_AUTORELOAD(&htim16, SLOW_MODE_PERIOD); // Set 1.0s interval
+        }
+        // Wait for button release
+        while(HAL_GPIO_ReadPin(Button0_GPIO_Port, Button0_Pin) == GPIO_PIN_RESET);
+      }
+    }
+    /* USER CODE END 3 */
+  }
+}
+
+// ... (Keep the SystemClock_Config, MX_TIM16_Init, and MX_GPIO_Init functions as they were) ...
+// ... Make sure the initial Period in MX_TIM16_Init is SLOW_MODE_PERIOD ...
+
+/* USER CODE BEGIN 4 */
+
+/**
+  * @brief  Helper function to write a byte value to the 8 LEDs.
+  * @param  value: An 8-bit value where bit N corresponds to LED N.
+  */
+void write_leds(uint8_t value)
+{
+  HAL_GPIO_WritePin(LED0_GPIO_Port, LED0_Pin, (value & 0x01) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LED1_GPIO_Port, LED1_Pin, (value & 0x02) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LED2_GPIO_Port, LED2_Pin, (value & 0x04) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LED3_GPIO_Port, LED3_Pin, (value & 0x08) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LED4_GPIO_Port, LED4_Pin, (value & 0x10) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LED5_GPIO_Port, LED5_Pin, (value & 0x20) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LED6_GPIO_Port, LED6_Pin, (value & 0x40) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LED7_GPIO_Port, LED7_Pin, (value & 0x80) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+/**
+  * @brief  TIM16 Interrupt Service Routine (ISR).
+  * @note   This function is called automatically by the hardware when the
+  *         TIM16 counter overflows. Its only job is to update the LED
+  *         pattern for the currently active mode. It is kept lean and fast.
+  */
+void TIM16_IRQHandler(void)
+{
+	// Acknowledge the interrupt to clear the hardware flag.
+	HAL_TIM_IRQHandler(&htim16);
+
+	switch(current_mode)
+	{
+		case 1: // Mode 1: Back and forth, single LED
+			write_leds(led_patterns[led_position]);
+			led_position += direction;
+			if (led_position >= 7) { direction = -1; }
+			if (led_position <= 0) { direction = 1; }
+			break;
+
+		case 2: // Mode 2: Inverse back and forth, single LED off
+			write_leds(~led_patterns[led_position]);
+			led_position += direction;
+			if (led_position >= 7) { direction = -1; }
+			if (led_position <= 0) { direction = 1; }
+			break;
+
+		case 3: // Mode 3: Sparkle
+			write_leds(rand() % 256); // Display a random 8-bit pattern
+			break;
+
+		default: // Mode 0 (Off) or any other state
+			write_leds(0x00); // Ensure all LEDs are off
+			break;
+	}
+}
+/* USER CODE END 4 */
+
+// ... (Keep the rest of the file: Error_Handler, assert_failed) ...
