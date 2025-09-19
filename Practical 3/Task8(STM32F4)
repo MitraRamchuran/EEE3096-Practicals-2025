@@ -1,0 +1,150 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Mandelbrot Benchmark + Power-Measurement Signal
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+
+#include "main.h"
+#include <stdint.h>
+
+#define MAX_ITER 100
+
+volatile uint32_t start_time = 0;
+volatile uint32_t end_time   = 0;
+volatile uint32_t execution_time = 0;
+volatile uint64_t checksum[5] = {0};
+
+uint64_t width[5]  = {128, 160, 192, 224, 256};
+uint64_t height[5] = {128, 160, 192, 224, 256};
+
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+uint64_t calculate_mandelbrot_fixed_point_arithmetic(int width, int height, int max_iterations);
+
+int main(void)
+{
+    HAL_Init();
+    SystemClock_Config();
+    MX_GPIO_Init();
+
+    // Choose one test case, e.g. the 3rd size (index 2)
+    int idx = 2;  // this corresponds to width[idx] × height[idx]
+
+    // Signal start to power meter
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_SET);
+
+    start_time = HAL_GetTick();
+
+    checksum[idx] = calculate_mandelbrot_fixed_point_arithmetic(width[idx], height[idx], MAX_ITER);
+
+    end_time = HAL_GetTick();
+
+    // Signal stop to power meter
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_RESET);
+
+    execution_time = end_time - start_time;
+
+    // (Optional) blink LED1 to indicate done
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_SET);
+    HAL_Delay(1000);
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET);
+
+    while (1)
+    {
+    }
+}
+
+void SystemClock_Config(void)
+{
+    // same correct STM32F4 clock config as you use now (PLL etc.)
+    RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+    RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+    __HAL_RCC_PWR_CLK_ENABLE();
+    __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE2);
+
+    RCC_OscInitStruct.OscillatorType      = RCC_OSCILLATORTYPE_HSI;
+    RCC_OscInitStruct.HSIState            = RCC_HSI_ON;
+    RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+    RCC_OscInitStruct.PLL.PLLState        = RCC_PLL_ON;
+    RCC_OscInitStruct.PLL.PLLSource       = RCC_PLLSOURCE_HSI;
+    RCC_OscInitStruct.PLL.PLLM            = 16;
+    RCC_OscInitStruct.PLL.PLLN            = 336;
+    RCC_OscInitStruct.PLL.PLLP            = RCC_PLLP_DIV4;
+    RCC_OscInitStruct.PLL.PLLQ            = 7;
+
+    if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+        Error_Handler();
+
+    RCC_ClkInitStruct.ClockType      = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK |
+                                       RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+    RCC_ClkInitStruct.SYSCLKSource   = RCC_SYSCLKSOURCE_PLLCLK;
+    RCC_ClkInitStruct.AHBCLKDivider  = RCC_SYSCLK_DIV1;
+    RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+    RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+    if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+        Error_Handler();
+}
+
+static void MX_GPIO_Init(void)
+{
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+
+    // Status LEDs
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2, GPIO_PIN_RESET);
+
+    GPIO_InitStruct.Pin   = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2;
+    GPIO_InitStruct.Mode  = GPIO_MODE_OUTPUT_PP;
+    GPIO_InitStruct.Pull  = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+}
+
+uint64_t calculate_mandelbrot_fixed_point_arithmetic(int width, int height, int max_iterations)
+{
+    uint64_t mandelbrot_checksum = 0;
+    int32_t scale_factor = 10000;
+    int16_t x0, y0, xi, yi, iteration, xi_temp;
+
+    for (int y = 0; y < height; y++)
+    {
+        for (int x = 0; x < width; x++)
+        {
+            x0 = (x * scale_factor / width) * 35 / 10 - 25 * scale_factor / 10;
+            y0 = (y * scale_factor / height) * 2 - scale_factor;
+
+            xi = 0;
+            yi = 0;
+            iteration = 0;
+
+            while ((iteration < max_iterations) && (xi * xi + yi * yi <= 4 * scale_factor * scale_factor))
+            {
+                xi_temp = (xi * xi - yi * yi) / scale_factor;
+                yi      = (2 * xi * yi) / scale_factor + y0;
+                xi      = xi_temp + x0;
+                ++iteration;
+            }
+
+            mandelbrot_checksum += iteration;
+        }
+    }
+    return mandelbrot_checksum;
+}
+
+void Error_Handler(void)
+{
+    __disable_irq();
+    while (1) { }
+}
+
+#ifdef USE_FULL_ASSERT
+void assert_failed(uint8_t *file, uint32_t line)
+{
+}
+#endif
