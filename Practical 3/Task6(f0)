@@ -1,0 +1,287 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Primary program logic for Mandelbrot computation
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2025 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software follows the LICENSE terms available in the root folder.
+  * If no LICENSE is provided, the code is offered "AS-IS".
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+#include <stdint.h>
+#include "stm32f0xx.h"
+#include "stm32f0xx_hal.h"
+#include "stm32f0xx_hal_rcc.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+/* Additional library includes can be added here if necessary */
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+/* Place custom typedefs here */
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+#define MAX_ITER 100  // Maximum iteration count for Mandelbrot computation
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+/* Custom macros can be defined here */
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+/*TASK6*/
+/* USER CODE BEGIN PV */
+// Variables to track execution performance
+volatile uint32_t start_time = 0;       // Timestamp before computation starts
+volatile uint32_t end_time = 0;         // Timestamp after computation ends
+volatile uint32_t execution_time;       // Total elapsed time in milliseconds
+volatile uint64_t checksum[5];          // Store computed Mandelbrot sums for each resolution
+
+// Image resolution arrays
+uint64_t width[5]  = {128, 160, 192, 224, 256};
+uint64_t height[5] = {128, 160, 192, 224, 256};
+
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+/* USER CODE BEGIN PFP */
+// Function prototypes for Mandelbrot calculations
+uint64_t calculate_mandelbrot_fixed_point_arithmetic(int width, int height, int max_iterations);
+uint64_t calculate_mandelbrot_double(int width, int height, int max_iterations);
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+/* Any additional initialization functions can be placed here */
+/* USER CODE END 0 */
+
+/**
+  * @brief  Main program entry point.
+  * @retval int
+  */
+int main(void)
+{
+    /* USER CODE BEGIN 1 */
+
+    /* USER CODE END 1 */
+
+    /* Initialize HAL library and peripherals */
+    HAL_Init();
+
+    /* USER CODE BEGIN Init */
+
+    /* USER CODE END Init */
+
+    /* Configure system clock settings */
+    SystemClock_Config();
+
+    /* USER CODE BEGIN SysInit */
+
+    /* USER CODE END SysInit */
+
+    /* Initialize GPIO pins for LED indicators */
+    MX_GPIO_Init();
+
+    /* USER CODE BEGIN 2 */
+
+    /* USER CODE END 2 */
+
+    /* Main infinite loop */
+    while (1)
+    {
+        // Capture start time for performance measurement
+        start_time = HAL_GetTick();
+
+        // Iterate through predefined image resolutions
+        for (int i = 0; i < 5; i++)
+        {
+            // LED0 ON: Indicate computation start
+            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_SET);
+
+            // Compute Mandelbrot set and store result in checksum array
+            checksum[i] = calculate_mandelbrot_fixed_point_arithmetic(width[i], height[i], MAX_ITER);
+            // Alternative double-precision version:
+            // checksum[i] = calculate_mandelbrot_double(width[i], height[i], MAX_ITER);
+
+            // LED0 OFF, LED1 ON: Signal end of computation
+            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_SET);
+
+            // Keep LED1 ON for 1 second to indicate completion
+            HAL_Delay(1000);
+
+            // Turn off LED1
+            HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET);
+        }
+
+        // Capture end time
+        end_time = HAL_GetTick();
+
+        // Calculate total execution time for all resolutions
+        execution_time = end_time - start_time;
+    }
+}
+
+/**
+  * @brief System Clock Configuration
+  */
+void SystemClock_Config(void)
+{
+    RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+    RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+    // Initialize oscillator parameters
+    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+    RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+    RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+    RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+    RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+    RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL12;
+    RCC_OscInitStruct.PLL.PREDIV = RCC_PREDIV_DIV1;
+    if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+    {
+        Error_Handler();
+    }
+
+    // Configure CPU, AHB, and APB clocks
+    RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK|RCC_CLOCKTYPE_PCLK1;
+    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+    RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+    RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+    if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_1) != HAL_OK)
+    {
+        Error_Handler();
+    }
+}
+
+/**
+  * @brief GPIO Initialization
+  */
+static void MX_GPIO_Init(void)
+{
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    // Enable GPIO ports clocks
+    __HAL_RCC_GPIOF_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+
+    // Reset all output pins to LOW initially
+    HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_3
+                              |GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_7, GPIO_PIN_RESET);
+
+    // Configure PB0-PB7 as push-pull outputs without pull-up/down
+    GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_3
+                        |GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6|GPIO_PIN_7;
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+}
+
+/* USER CODE BEGIN 4 */
+
+/**
+ * @brief Compute Mandelbrot set using fixed-point arithmetic
+ */
+uint64_t calculate_mandelbrot_fixed_point_arithmetic(int width, int height, int max_iterations)
+{
+    uint64_t mandelbrot_checksum = 0;
+    int32_t scale_factor = 1000;  // Scaling factor for fixed-point calculations
+    int16_t x0, y0, xi, yi, iteration, xi_temp;
+
+    for (int y = 0; y < height; y++)
+    {
+        for (int x = 0; x < width; x++)
+        {
+            // Map pixel coordinates to fixed-point space
+            x0 = (x * scale_factor / width) * 35 / 10 - 25 * scale_factor / 10;
+            y0 = (y * scale_factor / height) * 2 - scale_factor;
+
+            xi = yi = iteration = 0;
+
+            while ((iteration < max_iterations) && (xi*xi + yi*yi <= 4*scale_factor*scale_factor))
+            {
+                xi_temp = (xi*xi - yi*yi) / scale_factor;
+                yi = (2*xi*yi) / scale_factor + y0;
+                xi = xi_temp + x0;
+                iteration++;
+            }
+
+            mandelbrot_checksum += iteration;
+        }
+    }
+
+    return mandelbrot_checksum;
+}
+
+/**
+ * @brief Compute Mandelbrot set using double-precision floating point
+ */
+uint64_t calculate_mandelbrot_double(int width, int height, int max_iterations)
+{
+    uint64_t mandelbrot_sum = 0;
+    double x0, y0, xi, yi, iteration, temp;
+
+    for (int y = 0; y < height; y++)
+    {
+        for (int x = 0; x < width; x++)
+        {
+            // Map pixel coordinates to [-2.5, 1] x [-1, 1] range
+            x0 = ((double)x / width) * 3.5 - 2.5;
+            y0 = ((double)y / height) * 2.0 - 1.0;
+
+            xi = yi = iteration = 0;
+
+            while ((iteration < max_iterations) && (xi*xi + yi*yi <= 4))
+            {
+                temp = xi*xi - yi*yi;
+                yi = 2*xi*yi + y0;
+                xi = temp + x0;
+                iteration++;
+            }
+
+            mandelbrot_sum += iteration;
+        }
+    }
+
+    return mandelbrot_sum;
+}
+
+/* USER CODE END 4 */
+
+/**
+  * @brief Error handler executed in case of HAL failure
+  */
+void Error_Handler(void)
+{
+    __disable_irq();
+    while (1)
+    {
+        // Infinite loop to indicate failure
+    }
+}
+
+#ifdef USE_FULL_ASSERT
+void assert_failed(uint8_t *file, uint32_t line)
+{
+    // Optional user implementation to report assertion failures
+}
+#endif /* USE_FULL_ASSERT */
