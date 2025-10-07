@@ -1,0 +1,603 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2025 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include <stdio.h>
+#include "stm32f4xx.h"
+#include "lcd_stm32f4.h"
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+#define NS       128        // Number of samples in each Look-Up Table (LUT)
+#define TIM2CLK  16000000   // TIM2 clock frequency = 16 MHz
+#define F_SIGNAL 1000       // Desired output frequency (1 kHz for testing)
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+TIM_HandleTypeDef htim2;    // Timer 2 handle - used to trigger DMA transfers
+TIM_HandleTypeDef htim3;    // Timer 3 handle - used for PWM generation
+DMA_HandleTypeDef hdma_tim2_ch1;  // DMA handle for TIM2 Channel 1
+
+/* USER CODE BEGIN PV */
+// Look-Up Tables (LUTs) for different waveforms - each contains 128 samples (12-bit DAC values 0-4095)
+// Sine Wave LUT: Smooth periodic oscillation
+uint32_t Sin_LUT[NS] = {
+    2047, 2147, 2248, 2347, 2446, 2545, 2641, 2737, 2831, 2922, 3012, 3100, 3185, 3267, 3346, 3422,
+    3495, 3564, 3630, 3692, 3749, 3803, 3853, 3898, 3939, 3975, 4006, 4033, 4055, 4072, 4085, 4092,
+    4095, 4092, 4085, 4072, 4055, 4033, 4006, 3975, 3939, 3898, 3853, 3803, 3749, 3692, 3630, 3564,
+    3495, 3422, 3346, 3267, 3185, 3100, 3012, 2922, 2831, 2737, 2641, 2545, 2446, 2347, 2248, 2147,
+    2047, 1947, 1846, 1747, 1648, 1549, 1453, 1357, 1263, 1172, 1082, 994, 909, 827, 748, 672,
+    599, 530, 464, 402, 345, 291, 241, 196, 155, 119, 88, 61, 39, 22, 9, 2,
+    0, 2, 9, 22, 39, 61, 88, 119, 155, 196, 241, 291, 345, 402, 464, 530,
+    599, 672, 748, 827, 909, 994, 1082, 1172, 1263, 1357, 1453, 1549, 1648, 1747, 1846, 1947
+};
+
+// Sawtooth Wave LUT: Linear ramp that resets abruptly
+uint32_t Saw_LUT[NS] = {
+    0, 31, 63, 95, 127, 159, 191, 223, 255, 287, 319, 351, 383, 415, 447, 479,
+    511, 543, 575, 607, 639, 671, 703, 735, 767, 799, 831, 863, 895, 927, 959, 991,
+    1023, 1055, 1087, 1119, 1151, 1183, 1215, 1247, 1279, 1311, 1343, 1375, 1407, 1439, 1471, 1503,
+    1535, 1567, 1599, 1631, 1663, 1695, 1727, 1759, 1791, 1823, 1855, 1887, 1919, 1951, 1983, 2015,
+    2047, 2079, 2111, 2143, 2175, 2207, 2239, 2271, 2303, 2335, 2367, 2399, 2431, 2463, 2495, 2527,
+    2559, 2591, 2623, 2655, 2687, 2719, 2751, 2783, 2815, 2847, 2879, 2911, 2943, 2975, 3007, 3039,
+    3071, 3103, 3135, 3167, 3199, 3231, 3263, 3295, 3327, 3359, 3391, 3423, 3455, 3487, 3519, 3551,
+    3583, 3615, 3647, 3679, 3711, 3743, 3775, 3807, 3839, 3871, 3903, 3935, 3967, 3999, 4031, 4063
+};
+
+// Triangle Wave LUT: Linear rise and fall
+uint32_t Triangle_LUT[NS] = {
+    0, 127, 255, 383, 511, 639, 767, 895, 1023, 1151, 1279, 1407, 1535, 1663, 1791, 1919,
+    2047, 2175, 2303, 2431, 2559, 2687, 2815, 2943, 3071, 3199, 3327, 3455, 3583, 3711, 3839, 3967,
+    4095, 3967, 3839, 3711, 3583, 3455, 3327, 3199, 3071, 2943, 2815, 2687, 2559, 2431, 2303, 2175,
+    2047, 1919, 1791, 1663, 1535, 1407, 1279, 1151, 1023, 895, 767, 639, 511, 383, 255, 127,
+    0, 127, 255, 383, 511, 639, 767, 895, 1023, 1151, 1279, 1407, 1535, 1663, 1791, 1919,
+    2047, 2175, 2303, 2431, 2559, 2687, 2815, 2943, 3071, 3199, 3327, 3455, 3583, 3711, 3839, 3967,
+    4095, 3967, 3839, 3711, 3583, 3455, 3327, 3199, 3071, 2943, 2815, 2687, 2559, 2431, 2303, 2175,
+    2047, 1919, 1791, 1663, 1535, 1407, 1279, 1151, 1023, 895, 767, 639, 511, 383, 255, 127
+};
+
+// Piano Waveform LUT: Sampled piano sound characteristics
+uint32_t Piano_LUT[NS] = {
+    2047, 2159, 1980, 2100, 2058, 2076, 2043, 2140, 2062, 2081, 2066, 2065, 1990, 2403, 2074, 1761,
+    2042, 2046, 2003, 2059, 2003, 2100, 1524, 2043, 2331, 2044, 3034, 1590, 1772, 1834, 2260, 2264,
+    1516, 2205, 1942, 2069, 2025, 2080, 1768, 1899, 1948, 2062, 2254, 1769, 2115, 1902, 2876, 2037,
+    2090, 2064, 2050, 2035, 1969, 2038, 2801, 1930, 2439, 1782, 1941, 1991, 1146, 1905, 1638, 2052,
+    1674, 2026, 2166, 2059, 2031, 2015, 1855, 2132, 1964, 2079, 1744, 2486, 2236, 2026, 2347, 2242,
+    2051, 2108, 2017, 2057, 2053, 2033, 2241, 2064, 2063, 1919, 1855, 2028, 1976, 2245, 2060, 2130,
+    2410, 2031, 2108, 2064, 2082, 2040, 1668, 1861, 1929, 2031, 2165, 2138, 2009, 2019, 1827, 2193,
+    2034, 2079, 1987, 2059, 2080, 2044, 1924, 1894, 1616, 1614, 2097, 2212, 2041, 2083, 1987, 2047
+};
+
+// Guitar Waveform LUT: Sampled guitar sound characteristics
+uint32_t Guitar_LUT[NS] = {
+    2047, 2249, 2369, 2161, 2262, 1941, 1856, 2519, 2015, 2113, 2067, 2028, 2067, 2205, 1754, 2062,
+    2042, 2075, 1777, 2470, 1935, 1936, 2512, 1883, 1749, 2041, 2020, 2054, 2037, 2026, 1961, 2059,
+    2052, 1993, 2003, 2137, 1871, 2182, 1984, 2036, 1904, 2062, 2062, 2062, 2056, 1931, 2138, 2041,
+    1876, 1910, 2278, 1866, 2310, 1976, 1963, 2323, 2009, 2165, 2089, 1776, 1969, 2142, 2878, 1990,
+    1869, 2122, 2144, 2258, 2220, 2373, 1730, 2353, 2083, 2019, 2078, 2062, 2357, 1915, 2061, 2055,
+    2155, 2167, 1786, 2145, 2081, 1671, 2031, 1728, 2097, 2082, 2038, 2034, 1984, 1910, 2091, 2046,
+    2392, 1833, 2348, 1852, 2152, 1871, 2345, 2471, 1987, 2050, 2015, 2053, 2140, 1911, 2054, 2046,
+    1680, 2180, 2062, 1998, 2240, 1999, 1977, 1733, 2090, 1804, 2371, 1934, 1688, 2592, 2087, 2045
+};
+
+// Drum Waveform LUT: Sampled drum sound characteristics with sharp attack and decay
+uint32_t Drum_LUT[NS] = {
+    2047, 3358, 1882, 2123, 2068, 3361, 1915, 1944, 2087, 2525, 2029, 2027, 2035, 2023, 1459, 1850,
+    2087, 2032, 2046, 2057, 2048, 2106, 2042, 2025, 2107, 1841, 2067, 2052, 2216, 2018, 2951, 1259,
+    1714, 2106, 2429, 2106, 1936, 2058, 2029, 2035, 4086, 1858, 2038, 2041, 2373, 2338, 1829, 2000,
+    2346, 2062, 2015, 2048, 649, 2418, 2085, 2074, 23, 2224, 2038, 2026, 2177, 2048, 2911, 2393,
+    4084, 1982, 2276, 2033, 2608, 2693, 2062, 2100, 1666, 2011, 2090, 2046, 2611, 1875, 2046, 2074,
+    1995, 2056, 2040, 2047, 2082, 2051, 2075, 2047, 2910, 2063, 2019, 2078, 2033, 2054, 1779, 2038,
+    778, 2275, 1969, 2035, 2010, 2041, 2094, 2040, 1677, 2057, 2062, 2030, 2051, 2412, 2155, 2230,
+    2130, 2029, 2039, 1724, 2137, 2417, 2132, 4094, 2147, 2012, 2041, 1632, 1974, 527, 2517, 2047
+};
+
+// Calculate TIM2 period to achieve desired output frequency
+// Formula: TIM2_Ticks = TIM2_Clock / (Samples_Per_Cycle * Desired_Frequency)
+uint32_t TIM2_Ticks = TIM2CLK / (NS * F_SIGNAL);
+
+// Destination address for DMA transfers - this is TIM3's Capture/Compare Register 3 (CCR3)
+// DMA will write LUT values here to control PWM duty cycle
+uint32_t DestAddress = (uint32_t) &(TIM3->CCR3);
+
+// Global variable to track current waveform (0-5)
+// 0 = Sine, 1 = Sawtooth, 2 = Triangle, 3 = Piano, 4 = Guitar, 5 = Drum
+volatile uint8_t current_waveform = 0;
+
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
+static void MX_TIM2_Init(void);
+static void MX_TIM3_Init(void);
+/* USER CODE BEGIN PFP */
+void EXTI0_IRQHandler(void);  // External interrupt handler for button press
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+
+/* USER CODE END 0 */
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
+{
+  /* USER CODE BEGIN 1 */
+  // Application initialization code can be placed here
+  /* USER CODE END 1 */
+
+  /* MCU Configuration--------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
+
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
+  SystemClock_Config();
+
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();    // Initialize GPIO pins
+  MX_DMA_Init();     // Initialize DMA controller
+  MX_TIM2_Init();    // Initialize TIM2 (triggers DMA transfers)
+  MX_TIM3_Init();    // Initialize TIM3 (generates PWM output)
+  /* USER CODE BEGIN 2 */
+
+  // Initialize LCD display
+  initLCD();
+  lcd_command(CLEAR);
+  lcd_command(CURSOR_HOME);
+  lcd_putstring("Waveform: ");
+  lcd_command(LINE_TWO);
+
+  // Start TIM3 in PWM mode on Channel 3
+  // This generates the PWM signal on the output pin
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
+
+  // Start TIM2 in Output Compare mode on Channel 1
+  // TIM2 triggers DMA transfers at regular intervals
+  HAL_TIM_OC_Start(&htim2, TIM_CHANNEL_1);
+
+  // Start DMA in Interrupt mode
+  // Source: Sine_LUT (initial waveform)
+  // Destination: TIM3->CCR3 (PWM duty cycle register)
+  // Length: NS (Number of samples)
+  HAL_DMA_Start_IT(&hdma_tim2_ch1, (uint32_t)Sin_LUT, DestAddress, NS);
+
+  // Display initial waveform on LCD
+  lcd_init();
+  lcd_clear();
+  lcd_putstring("Sine");
+
+  // Enable DMA for TIM2 Channel 1
+  // This allows TIM2 to trigger DMA transfers automatically
+  __HAL_TIM_ENABLE_DMA(&htim2, TIM_DMA_CC1);
+
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+    // Main loop - most work is done by hardware (DMA & Timers)
+    // and interrupt handlers
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
+  }
+  /* USER CODE END 3 */
+}
+
+/**
+  * @brief System Clock Configuration
+  * @retval None
+  */
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+  /** Configure the main internal regulator output voltage */
+  __HAL_RCC_PWR_CLK_ENABLE();
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE3);
+
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Initializes the CPU, AHB and APB buses clocks */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief TIM2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM2_Init(void)
+{
+  /* USER CODE BEGIN TIM2_Init 0 */
+
+  /* USER CODE END TIM2_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM2_Init 1 */
+
+  /* USER CODE END TIM2_Init 1 */
+
+  // Configure TIM2 basic parameters
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 0;                    // No prescaling - use full clock
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP; // Count up
+  htim2.Init.Period = TIM2_Ticks - 1;          // Set period for desired frequency
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  // Configure clock source
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  // Initialize Output Compare mode
+  if (HAL_TIM_OC_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  // Configure master mode (no trigger output needed)
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  // Configure Output Compare channel
+  sConfigOC.OCMode = TIM_OCMODE_TIMING;       // Timing mode (no output)
+  sConfigOC.Pulse = 0;                        // Initial compare value
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+
+  if (HAL_TIM_OC_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /* USER CODE BEGIN TIM2_Init 2 */
+  // DMA configuration for TIM2 Channel 1
+  // Enable DMA1 clock
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  // Configure DMA for TIM2 Channel 1
+  hdma_tim2_ch1.Instance = DMA1_Stream5;
+  hdma_tim2_ch1.Init.Channel = DMA_CHANNEL_3;          // TIM2_CH1 uses DMA channel 3
+  hdma_tim2_ch1.Init.Direction = DMA_MEMORY_TO_PERIPH; // Transfer from memory to peripheral
+  hdma_tim2_ch1.Init.PeriphInc = DMA_PINC_DISABLE;     // Peripheral address doesn't increment
+  hdma_tim2_ch1.Init.MemInc = DMA_MINC_ENABLE;         // Memory address increments
+  hdma_tim2_ch1.Init.PeriphDataAlignment = DMA_PDATAALIGN_WORD;  // 32-bit transfers
+  hdma_tim2_ch1.Init.MemDataAlignment = DMA_MDATAALIGN_WORD;     // 32-bit transfers
+  hdma_tim2_ch1.Init.Mode = DMA_CIRCULAR;              // Continuous circular buffer
+  hdma_tim2_ch1.Init.Priority = DMA_PRIORITY_HIGH;     // High priority
+  hdma_tim2_ch1.Init.FIFOMode = DMA_FIFOMODE_DISABLE;  // No FIFO
+
+  // Initialize DMA
+  if (HAL_DMA_Init(&hdma_tim2_ch1) != HAL_OK)
+  {
+      Error_Handler();
+  }
+
+  // Link DMA handle to TIM2 handle for Channel 1
+  __HAL_LINKDMA(&htim2, hdma[TIM_DMA_ID_CC1], hdma_tim2_ch1);
+  /* USER CODE END TIM2_Init 2 */
+}
+
+/**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+
+  // Configure TIM3 basic parameters
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 0;                    // No prescaling
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP; // Count up
+  htim3.Init.Period = 65535;                   // Maximum period for 16-bit timer
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  // Configure clock source
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  // Initialize PWM mode
+  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  // Configure master mode
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  // Configure PWM channel
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;          // PWM mode 1
+  sConfigOC.Pulse = 0;                         // Initial duty cycle
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;  // Active high
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
+
+  // Post-initialization for GPIO configuration
+  HAL_TIM_MspPostInit(&htim3);
+}
+
+/**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+  /* USER CODE BEGIN DMA_Init 0 */
+
+  /* USER CODE END DMA_Init 0 */
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Stream5_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream5_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream5_IRQn);
+
+  /* USER CODE BEGIN DMA_Init 1 */
+
+  /* USER CODE END DMA_Init 1 */
+}
+
+/**
+  * @brief GPIO Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_GPIO_Init(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  /* USER CODE BEGIN MX_GPIO_Init_1 */
+
+  /* USER CODE END MX_GPIO_Init_1 */
+
+  /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOH_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+
+  // -------------------------------
+  // LCD pins configuration
+  // -------------------------------
+
+  // Configure PC14 (RS) and PC15 (E) as output push-pull
+  GPIO_InitStruct.Pin = GPIO_PIN_14 | GPIO_PIN_15;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  // Configure PB8 (D4) and PB9 (D5) as output push-pull
+  GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_9;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  // Configure PA12 (D6) and PA15 (D7) as output push-pull
+  GPIO_InitStruct.Pin = GPIO_PIN_12 | GPIO_PIN_15;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  // Set all LCD pins LOW initially
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_14 | GPIO_PIN_15, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_8 | GPIO_PIN_9, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_12 | GPIO_PIN_15, GPIO_PIN_RESET);
+
+  // -------------------------------
+  // Button0 configuration (PA0)
+  // -------------------------------
+  GPIO_InitStruct.Pin = GPIO_PIN_0;           // Button on PA0
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING; // Interrupt on rising edge (button press)
+  GPIO_InitStruct.Pull = GPIO_PULLUP;         // Internal pull-up resistor
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  // Enable and set EXTI line 0 interrupt priority
+  HAL_NVIC_SetPriority(EXTI0_IRQn, 2, 0);    // Lower priority than DMA
+  HAL_NVIC_EnableIRQ(EXTI0_IRQn);             // Enable EXTI0 interrupt
+
+  /* USER CODE END MX_GPIO_Init_2 */
+}
+
+/* USER CODE BEGIN 4 */
+/**
+  * @brief EXTI0 Interrupt Handler
+  * @note  Handles button presses to cycle through waveforms
+  * @retval None
+  */
+void EXTI0_IRQHandler(void)
+{
+    static uint32_t last_press = 0;    // Timestamp of last button press (for debouncing)
+    uint32_t now = HAL_GetTick();      // Current time in milliseconds
+
+    // Array of pointers to all waveform LUTs
+    uint32_t *waveforms[] = {
+        Sin_LUT,       // 0: Sine wave
+        Saw_LUT,       // 1: Sawtooth wave
+        Triangle_LUT,  // 2: Triangle wave
+        Piano_LUT,     // 3: Piano sample
+        Guitar_LUT,    // 4: Guitar sample
+        Drum_LUT       // 5: Drum sample
+    };
+
+    // Array of waveform names for LCD display
+    char *waveform_names[] = {
+        "Sine",
+        "Saw",
+        "Tri",
+        "Piano",
+        "Guitar",
+        "Drum"
+    };
+
+    // Debouncing: only accept button presses spaced >200ms apart
+    if (now - last_press > 200)
+    {
+        last_press = now;  // Update last press time
+
+        // Stop current DMA transfer to prevent conflicts
+        __HAL_TIM_DISABLE_DMA(&htim2, TIM_DMA_CC1);  // Disable DMA trigger
+        HAL_DMA_Abort_IT(&hdma_tim2_ch1);             // Abort ongoing DMA transfer
+
+        // Cycle to next waveform (wrap around after last one)
+        current_waveform = (current_waveform + 1) % 6;
+
+        // Restart DMA with new waveform LUT
+        HAL_DMA_Start_IT(&hdma_tim2_ch1,
+                        (uint32_t)waveforms[current_waveform],  // New source LUT
+                        DestAddress,                           // Same destination (TIM3->CCR3)
+                        NS);                                   // Same number of samples
+
+        // Re-enable DMA triggering
+        __HAL_TIM_ENABLE_DMA(&htim2, TIM_DMA_CC1);
+
+        // Update LCD display with new waveform name
+        lcd_clear();
+        lcd_putstring(waveform_names[current_waveform]);
+    }
+
+    // Clear the EXTI interrupt flag
+    HAL_GPIO_EXTI_IRQHandler(GPIO_PIN_0);
+}
+/* USER CODE END 4 */
+
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
+void Error_Handler(void)
+{
+  /* USER CODE BEGIN Error_Handler_Debug */
+  /* User can add his own implementation to report the HAL error return state */
+  __disable_irq();  // Disable all interrupts
+  while (1)
+  {
+    // Hang here on error - could add error LED blinking here
+  }
+  /* USER CODE END Error_Handler_Debug */
+}
+
+#ifdef USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t *file, uint32_t line)
+{
+  /* USER CODE BEGIN 6 */
+  /* User can add his
